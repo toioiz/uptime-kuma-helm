@@ -1,0 +1,185 @@
+# Default values for uptime-kuma
+replicaCount: 1
+
+image:
+  repository: louislam/uptime-kuma
+  pullPolicy: IfNotPresent
+  tag: "2.0.2"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Uptime Kuma Configuration
+config:
+  # Database Type: sqlite (default) or mariadb
+  databaseType: sqlite
+  
+  # SQLite Configuration (used when databaseType is sqlite)
+  sqlite:
+    # Path where the SQLite database will be stored
+    path: /app/data/kuma.db
+  
+  # MariaDB/MySQL Configuration (used when databaseType is mariadb)
+  mariadb:
+    enabled: false
+    host: ""
+    port: 3306
+    database: uptime_kuma
+    username: uptime_kuma
+    # Password can be set directly or via existing secret
+    password: ""
+    existingSecret: ""
+    existingSecretPasswordKey: "mariadb-password"
+    # Additional connection options
+    sslEnabled: false
+    charset: utf8mb4
+  
+  # Server Configuration
+  server:
+    # Port the application listens on (default: 3001)
+    port: 3001
+    # Host to bind to (default: 0.0.0.0)
+    host: "0.0.0.0"
+    # Base URL for the application (useful behind reverse proxy)
+    baseUrl: ""
+  
+  # Initial Setup Configuration
+  setup:
+    # Disable initial setup wizard (requires manual database setup)
+    disableSetup: false
+    # Default language (en, de, fr, es, etc.)
+    defaultLanguage: "en"
+  
+  # Notification Settings
+  notifications:
+    # Enable/disable specific notification channels
+    enabled: true
+  
+  # Data retention
+  dataRetention:
+    # Keep monitoring data for X days (0 = keep forever)
+    days: 180
+  
+  # Additional environment variables
+  extraEnv: []
+  # - name: CUSTOM_VAR
+  #   value: "custom-value"
+  
+  # Environment variables from secrets
+  extraEnvFrom: []
+  # - secretRef:
+  #     name: uptime-kuma-secrets
+
+# Persistence Configuration
+persistence:
+  enabled: true
+  # storageClass: "-"
+  accessMode: ReadWriteOnce
+  size: 4Gi
+  annotations: {}
+  # existingClaim: ""
+  # Path where data is stored in the container
+  mountPath: /app/data
+
+service:
+  type: ClusterIP
+  port: 3001
+  targetPort: 3001
+  annotations: {}
+  # loadBalancerIP: ""
+  # externalTrafficPolicy: Cluster
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/proxy-body-size: 50m
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+  hosts:
+    - host: uptime-kuma.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: uptime-kuma-tls
+  #    hosts:
+  #      - uptime-kuma.local
+
+resources: {}
+  # limits:
+  #   cpu: 500m
+  #   memory: 512Mi
+  # requests:
+  #   cpu: 250m
+  #   memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Liveness and Readiness Probes
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+  successThreshold: 1
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+# Optional: Deploy MariaDB as part of this chart
+# Only used when config.mariadb.enabled is true
+mariadb:
+  enabled: false
+  auth:
+    database: uptime_kuma
+    username: uptime_kuma
+    password: changeme
+    rootPassword: changeme
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
