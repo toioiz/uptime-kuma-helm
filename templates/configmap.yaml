@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "uptime-kuma.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "uptime-kuma.labels" . | nindent 4 }}
+data:
+  TZ: {{ .Values.uptimeKuma.timezone | quote }}
+  UPTIME_KUMA_DATA_DIR: {{ .Values.uptimeKuma.dataDir | quote }}
+  DB_TYPE: "mysql2"
+  DB_HOSTNAME: {{ include "uptime-kuma.databaseHost" . | quote }}
+  DB_PORT: {{ include "uptime-kuma.databasePort" . | quote }}
+  DB_NAME: {{ include "uptime-kuma.databaseName" . | quote }}
+  DB_USERNAME: {{ include "uptime-kuma.databaseUser" . | quote }}

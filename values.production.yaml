@@ -1,0 +1,104 @@
+# =============================================================================
+# values.production.yaml
+# Example production overrides — copy and adapt for your environment.
+# Deploy with:
+#   helm upgrade --install uptime-kuma ./charts/uptime-kuma \
+#     -f values.production.yaml \
+#     --namespace monitoring --create-namespace
+# =============================================================================
+
+image:
+  repository: dhi.io/uptime-kuma
+  tag: "2.1.3"
+  pullPolicy: IfNotPresent
+
+# Provide the name of a pre-created imagePullSecret for dhi.io
+imagePullSecrets:
+  - name: dhi-registry-secret
+
+mysql:
+  enabled: true
+  image:
+    repository: dhi.io/mysql
+    tag: "8.4"
+
+  auth:
+    # Use an existing Secret managed by your secrets operator (e.g. External Secrets, Vault Agent).
+    # Secret must contain: mysql-root-password, mysql-password
+    existingSecret: "uptime-kuma-mysql-credentials"
+    database: "uptimekuma"
+    username: "uptimekuma"
+
+  persistence:
+    enabled: true
+    storageClass: "fast-ssd"   # replace with your StorageClass
+    size: 20Gi
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+persistence:
+  enabled: true
+  storageClass: "fast-ssd"
+  size: 10Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: uptime.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: uptime-kuma-tls
+      hosts:
+        - uptime.example.com
+
+networkPolicy:
+  enabled: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: prometheus   # match your Prometheus operator's serviceMonitorSelector
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+uptimeKuma:
+  timezone: "America/New_York"
+
+# Spread across nodes/zones if available
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: uptime-kuma

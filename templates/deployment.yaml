@@ -2,12 +2,16 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "uptime-kuma.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "uptime-kuma.labels" . | nindent 4 }}
-spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
+  {{- with .Values.podAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Uptime Kuma is not horizontally scalable — always use Recreate to avoid split-brain.
   strategy:
     type: Recreate
   selector:
@@ -15,12 +19,17 @@ spec:
       {{- include "uptime-kuma.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       labels:
         {{- include "uptime-kuma.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Restart on ConfigMap change.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -29,95 +38,90 @@ spec:
       serviceAccountName: {{ include "uptime-kuma.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.mysql.enabled }}
+      initContainers:
+        - name: wait-for-mysql
+          image: {{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}
+          imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for MySQL at {{ include "uptime-kuma.databaseHost" . }}:{{ include "uptime-kuma.databasePort" . }}..."
+              until mysql -h {{ include "uptime-kuma.databaseHost" . }} \
+                         -P {{ include "uptime-kuma.databasePort" . }} \
+                         -u {{ include "uptime-kuma.databaseUser" . }} \
+                         -p"$DB_PASSWORD" \
+                         -e "SELECT 1" >/dev/null 2>&1; do
+                echo "MySQL not ready, sleeping 3s..."
+                sleep 3
+              done
+              echo "MySQL is ready."
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "uptime-kuma.databaseSecretName" . }}
+                  key: db-password
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      {{- end }}
       containers:
-      - name: {{ .Chart.Name }}
-        securityContext:
-          {{- toYaml .Values.securityContext | nindent 12 }}
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
-        ports:
-        - name: http
-          containerPort: {{ .Values.config.server.port }}
-          protocol: TCP
-        env:
-        - name: UPTIME_KUMA_PORT
-          value: {{ .Values.config.server.port | quote }}
-        - name: UPTIME_KUMA_HOST
-          value: {{ .Values.config.server.host | quote }}
-        {{- if .Values.config.server.baseUrl }}
-        - name: UPTIME_KUMA_BASE_URL
-          value: {{ .Values.config.server.baseUrl | quote }}
-        {{- end }}
-        {{- if eq .Values.config.databaseType "mariadb" }}
-        {{- if .Values.config.mariadb.enabled }}
-        - name: UPTIME_KUMA_DB_TYPE
-          value: "mariadb"
-        - name: UPTIME_KUMA_DB_HOST
-          value: {{ .Values.config.mariadb.host | quote }}
-        - name: UPTIME_KUMA_DB_PORT
-          value: {{ .Values.config.mariadb.port | quote }}
-        - name: UPTIME_KUMA_DB_NAME
-          value: {{ .Values.config.mariadb.database | quote }}
-        - name: UPTIME_KUMA_DB_USER
-          value: {{ .Values.config.mariadb.username | quote }}
-        {{- if .Values.config.mariadb.existingSecret }}
-        - name: UPTIME_KUMA_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.config.mariadb.existingSecret }}
-              key: {{ .Values.config.mariadb.existingSecretPasswordKey }}
-        {{- else if .Values.config.mariadb.password }}
-        - name: UPTIME_KUMA_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "uptime-kuma.fullname" . }}-mariadb
-              key: mariadb-password
-        {{- end }}
-        {{- if .Values.config.mariadb.sslEnabled }}
-        - name: UPTIME_KUMA_DB_SSL
-          value: "true"
-        {{- end }}
-        {{- if .Values.config.mariadb.charset }}
-        - name: UPTIME_KUMA_DB_CHARSET
-          value: {{ .Values.config.mariadb.charset | quote }}
-        {{- end }}
-        {{- end }}
-        {{- end }}
-        {{- if .Values.config.setup.disableSetup }}
-        - name: UPTIME_KUMA_DISABLE_FRAME_SAMEORIGIN
-          value: "true"
-        {{- end }}
-        {{- if .Values.config.dataRetention.days }}
-        - name: UPTIME_KUMA_DATA_RETENTION_DAYS
-          value: {{ .Values.config.dataRetention.days | quote }}
-        {{- end }}
-        {{- with .Values.config.extraEnv }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-        {{- with .Values.config.extraEnvFrom }}
-        envFrom:
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-        {{- if .Values.livenessProbe.enabled }}
-        livenessProbe:
-          {{- toYaml .Values.livenessProbe | nindent 10 }}
-        {{- end }}
-        {{- if .Values.readinessProbe.enabled }}
-        readinessProbe:
-          {{- toYaml .Values.readinessProbe | nindent 10 }}
-        {{- end }}
-        resources:
-          {{- toYaml .Values.resources | nindent 12 }}
-        volumeMounts:
-        - name: data
-          mountPath: {{ .Values.persistence.mountPath }}
+        - name: uptime-kuma
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 3001
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "uptime-kuma.fullname" . }}-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "uptime-kuma.databaseSecretName" . }}
+                  key: db-password
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.uptimeKuma.dataDir }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
       volumes:
-      - name: data
-        {{- if .Values.persistence.enabled }}
-        persistentVolumeClaim:
-          claimName: {{ .Values.persistence.existingClaim | default (include "uptime-kuma.fullname" .) }}
-        {{- else }}
-        emptyDir: {}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "uptime-kuma.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -129,5 +133,9 @@ spec:
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}

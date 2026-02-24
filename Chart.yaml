@@ -1,16 +1,23 @@
 apiVersion: v2
 name: uptime-kuma
-description: A Helm chart for Uptime Kuma - A self-hosted monitoring tool
+description: >
+  Production-ready Helm chart for Uptime Kuma using Docker Hardened Images (dhi.io).
+  Deploys Uptime Kuma 2.x with a MySQL backend by default.
 type: application
 version: 1.0.0
-appVersion: "2.0.2"
+appVersion: "2.1.3"
 keywords:
-  - uptime-kuma
-  - monitoring
   - uptime
+  - monitoring
+  - observability
+  - kuma
 home: https://github.com/louislam/uptime-kuma
 sources:
   - https://github.com/louislam/uptime-kuma
 maintainers:
-  - name: Uptime Kuma
-    url: https://github.com/louislam/uptime-kuma
+  - name: platform-team
+    email: platform@example.com
+annotations:
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial production-ready release with DHI images and MySQL backend

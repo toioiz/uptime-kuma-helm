@@ -1,0 +1,26 @@
+{{- if .Values.mysql.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "uptime-kuma.mysql.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "uptime-kuma.mysql.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.mysql.service.type }}
+  # Headless service for stable DNS within the StatefulSet.
+  clusterIP: None
+  ports:
+    - port: {{ .Values.mysql.service.port }}
+      targetPort: 3306
+      protocol: TCP
+      name: mysql
+    {{- if .Values.metrics.enabled }}
+    - port: 9104
+      targetPort: 9104
+      protocol: TCP
+      name: metrics
+    {{- end }}
+  selector:
+    {{- include "uptime-kuma.mysql.selectorLabels" . | nindent 4 }}
+{{- end }}
