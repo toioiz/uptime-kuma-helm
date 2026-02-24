@@ -1,297 +1,126 @@
-# Uptime Kuma Helm Chart
+# uptime-kuma Helm Chart
 
-A Helm chart for deploying [Uptime Kuma](https://github.com/louislam/uptime-kuma) - a self-hosted monitoring tool like "Uptime Robot".
+Production-ready Helm chart for [Uptime Kuma](https://github.com/louislam/uptime-kuma) using
+[Docker Hardened Images](https://dhi.io) (`dhi.io`) for both the application and MySQL backend.
 
-## Features
+## Key features
 
-- Support for both SQLite (default) and MariaDB/MySQL databases
-- Configurable persistence with PersistentVolumeClaims
-- Ingress support with customizable annotations
-- Resource management and autoscaling
-- Health checks (liveness and readiness probes)
-- Security context configuration
-- ServiceAccount support
-- Comprehensive configuration options
+- **`dhi.io/uptime-kuma:2.1.3`** — zero-CVE, signed, minimal runtime image
+- **`dhi.io/mysql:8.4`** — hardened MySQL backend, deployed as a StatefulSet
+- MySQL `init-container` waits for the database to be healthy before Uptime Kuma starts
+- All passwords resolved from Kubernetes Secrets; supports `existingSecret` for external secret managers
+- Configurable NetworkPolicy (Uptime Kuma ↔ MySQL only, plus DNS + external HTTP/S)
+- Optional `dhi.io/mysqld-exporter` sidecar + Prometheus `ServiceMonitor`
+- `helm.sh/resource-policy: keep` on PVCs and Secrets to prevent accidental data loss
+- `Recreate` deployment strategy (Uptime Kuma is not horizontally scalable)
+- Pod Disruption Budgets for both app and MySQL
+- Full security context: non-root, `allowPrivilegeEscalation: false`, dropped capabilities
 
 ## Prerequisites
 
-- Kubernetes 1.19+
-- Helm 3.0+
-- PersistentVolume provisioner support in the underlying infrastructure (if persistence is enabled)
+| Tool | Version |
+|------|---------|
+| Kubernetes | ≥ 1.26 |
+| Helm | ≥ 3.10 |
+| Docker account | Required to pull from `dhi.io` |
 
-## Installing the Chart
-
-```bash
-# Add your repository (if applicable)
-# helm repo add my-repo https://...
-
-# Install with default values (SQLite)
-helm install uptime-kuma ./uptime-kuma
-
-# Install with custom values
-helm install uptime-kuma ./uptime-kuma -f custom-values.yaml
-
-# Install with MariaDB
-helm install uptime-kuma ./uptime-kuma \
-  --set config.databaseType=mariadb \
-  --set config.mariadb.enabled=true \
-  --set config.mariadb.host=mariadb.default.svc.cluster.local \
-  --set config.mariadb.password=your-secure-password
-```
-
-## Uninstalling the Chart
+### dhi.io authentication
 
 ```bash
-helm uninstall uptime-kuma
+docker login dhi.io
+
+kubectl create secret docker-registry dhi-registry-secret \
+  --docker-server=dhi.io \
+  --docker-username=<your-dockerhub-id> \
+  --docker-password=<your-pat> \
+  -n monitoring
 ```
 
-## Configuration
-
-### Database Options
-
-#### SQLite (Default)
-
-```yaml
-config:
-  databaseType: sqlite
-  sqlite:
-    path: /app/data/kuma.db
-```
-
-#### MariaDB/MySQL
-
-```yaml
-config:
-  databaseType: mariadb
-  mariadb:
-    enabled: true
-    host: mariadb.default.svc.cluster.local
-    port: 3306
-    database: uptime_kuma
-    username: uptime_kuma
-    password: your-secure-password
-    # Or use existing secret
-    existingSecret: mariadb-secret
-    existingSecretPasswordKey: password
-    sslEnabled: false
-    charset: utf8mb4
-```
-
-### Server Configuration
-
-```yaml
-config:
-  server:
-    port: 3001
-    host: "0.0.0.0"
-    baseUrl: "https://uptime.example.com"
-```
-
-### Persistence
-
-```yaml
-persistence:
-  enabled: true
-  storageClass: "standard"
-  accessMode: ReadWriteOnce
-  size: 4Gi
-  # Use existing claim
-  # existingClaim: my-existing-pvc
-```
-
-### Ingress
-
-```yaml
-ingress:
-  enabled: true
-  className: nginx
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/proxy-body-size: 50m
-  hosts:
-    - host: uptime.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls:
-    - secretName: uptime-kuma-tls
-      hosts:
-        - uptime.example.com
-```
-
-### Resources
-
-```yaml
-resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
-  requests:
-    cpu: 250m
-    memory: 256Mi
-```
-
-### Additional Environment Variables
-
-```yaml
-config:
-  extraEnv:
-    - name: TZ
-      value: "America/New_York"
-    - name: CUSTOM_VAR
-      value: "custom-value"
-  
-  extraEnvFrom:
-    - secretRef:
-        name: uptime-kuma-secrets
-    - configMapRef:
-        name: uptime-kuma-config
-```
-
-## Common Configuration Examples
-
-### Production Setup with MariaDB and Ingress
-
-```yaml
-replicaCount: 1
-
-image:
-  tag: "2.0.2"
-
-config:
-  databaseType: mariadb
-  mariadb:
-    enabled: true
-    host: mariadb.database.svc.cluster.local
-    port: 3306
-    database: uptime_kuma
-    username: uptime_kuma
-    existingSecret: mariadb-credentials
-    existingSecretPasswordKey: password
-    sslEnabled: true
-  
-  server:
-    baseUrl: "https://uptime.example.com"
-
-persistence:
-  enabled: true
-  storageClass: "fast-ssd"
-  size: 10Gi
-
-ingress:
-  enabled: true
-  className: nginx
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/proxy-body-size: 50m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-  hosts:
-    - host: uptime.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls:
-    - secretName: uptime-kuma-tls
-      hosts:
-        - uptime.example.com
-
-resources:
-  limits:
-    cpu: 1000m
-    memory: 1Gi
-  requests:
-    cpu: 500m
-    memory: 512Mi
-```
-
-### Simple Development Setup
-
-```yaml
-config:
-  databaseType: sqlite
-
-persistence:
-  enabled: true
-  size: 2Gi
-
-service:
-  type: NodePort
-
-resources:
-  requests:
-    cpu: 100m
-    memory: 128Mi
-```
-
-## Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `replicaCount` | Number of replicas | `1` |
-| `image.repository` | Image repository | `louislam/uptime-kuma` |
-| `image.tag` | Image tag | `2.0.2` |
-| `image.pullPolicy` | Image pull policy | `IfNotPresent` |
-| `config.databaseType` | Database type (sqlite or mariadb) | `sqlite` |
-| `config.server.port` | Server port | `3001` |
-| `config.server.host` | Server host | `0.0.0.0` |
-| `config.server.baseUrl` | Base URL for the application | `""` |
-| `persistence.enabled` | Enable persistence | `true` |
-| `persistence.size` | PVC size | `4Gi` |
-| `service.type` | Service type | `ClusterIP` |
-| `service.port` | Service port | `3001` |
-| `ingress.enabled` | Enable ingress | `false` |
-| `resources` | Resource limits and requests | `{}` |
-
-For a complete list of parameters, see the `values.yaml` file.
-
-## Backup and Restore
-
-### SQLite Database
+## Quick start
 
 ```bash
-# Backup
-kubectl cp <namespace>/<pod-name>:/app/data/kuma.db ./kuma-backup.db
-
-# Restore
-kubectl cp ./kuma-backup.db <namespace>/<pod-name>:/app/data/kuma.db
+helm upgrade --install uptime-kuma ./charts/uptime-kuma \
+  --namespace monitoring --create-namespace \
+  --set mysql.auth.rootPassword=changeme \
+  --set mysql.auth.password=changeme \
+  --set imagePullSecrets[0].name=dhi-registry-secret
 ```
 
-### MariaDB Database
-
-Use standard MariaDB backup tools like `mysqldump`:
+## Production deployment
 
 ```bash
-kubectl exec -it <mariadb-pod> -- mysqldump -u uptime_kuma -p uptime_kuma > backup.sql
+helm upgrade --install uptime-kuma ./charts/uptime-kuma \
+  -f values.production.yaml \
+  --namespace monitoring --create-namespace
 ```
 
-## Troubleshooting
+See [`values.production.yaml`](./values.production.yaml) for a fully annotated production example.
 
-### Pod is not starting
+## Using an external secret
 
-Check pod logs:
+Create a Secret with the required keys, then reference it:
+
+```yaml
+# Secret must contain: mysql-root-password, mysql-password
+apiVersion: v1
+kind: Secret
+metadata:
+  name: uptime-kuma-mysql-credentials
+  namespace: monitoring
+type: Opaque
+stringData:
+  mysql-root-password: "s3cr3t-root"
+  mysql-password: "s3cr3t-app"
+```
+
 ```bash
-kubectl logs -f <pod-name>
+helm upgrade --install uptime-kuma ./charts/uptime-kuma \
+  --set mysql.auth.existingSecret=uptime-kuma-mysql-credentials \
+  --set imagePullSecrets[0].name=dhi-registry-secret \
+  -n monitoring
 ```
 
-### Database connection issues
+## Using an external MySQL / MariaDB
 
-Verify database credentials and connectivity:
 ```bash
-kubectl exec -it <pod-name> -- env | grep UPTIME_KUMA_DB
+helm upgrade --install uptime-kuma ./charts/uptime-kuma \
+  --set mysql.enabled=false \
+  --set externalDatabase.host=my-mysql.example.com \
+  --set externalDatabase.password=changeme \
+  -n monitoring
 ```
 
-### Persistence issues
+## Key values reference
 
-Check PVC status:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `image.repository` | `dhi.io/uptime-kuma` | Uptime Kuma image |
+| `image.tag` | `2.1.3` | Image tag (pin this!) |
+| `mysql.enabled` | `true` | Deploy bundled MySQL |
+| `mysql.image.repository` | `dhi.io/mysql` | MySQL image |
+| `mysql.image.tag` | `8.4` | MySQL version |
+| `mysql.auth.rootPassword` | `""` | **Required** root password |
+| `mysql.auth.password` | `""` | **Required** app password |
+| `mysql.auth.existingSecret` | `""` | Pre-existing Secret name |
+| `mysql.persistence.size` | `8Gi` | MySQL PVC size |
+| `persistence.size` | `5Gi` | Uptime Kuma data PVC size |
+| `ingress.enabled` | `false` | Create Ingress resource |
+| `networkPolicy.enabled` | `false` | Enable NetworkPolicies |
+| `metrics.enabled` | `false` | mysqld-exporter sidecar |
+| `metrics.serviceMonitor.enabled` | `false` | Prometheus ServiceMonitor |
+
+## Upgrading
+
 ```bash
-kubectl get pvc
-kubectl describe pvc <pvc-name>
+helm upgrade uptime-kuma ./charts/uptime-kuma -n monitoring
 ```
 
-## License
+> PVCs and Secrets are annotated with `helm.sh/resource-policy: keep` so they survive `helm uninstall`.
 
-This Helm chart is provided as-is. Uptime Kuma is licensed under the MIT License.
+## Uninstall
 
-## Support
-
-- Uptime Kuma Documentation: https://github.com/louislam/uptime-kuma
+```bash
+helm uninstall uptime-kuma -n monitoring
+# Manually delete PVCs if no longer needed:
+kubectl delete pvc -l app.kubernetes.io/instance=uptime-kuma -n monitoring
+```

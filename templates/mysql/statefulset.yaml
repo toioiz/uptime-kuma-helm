@@ -1,0 +1,139 @@
+{{- if .Values.mysql.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "uptime-kuma.mysql.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "uptime-kuma.mysql.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "uptime-kuma.mysql.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "uptime-kuma.mysql.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "uptime-kuma.mysql.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Restart on secret changes.
+        checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.mysql.podSecurityContext | nindent 8 }}
+      containers:
+        - name: mysql
+          image: {{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}
+          imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
+          args:
+            {{- range .Values.mysql.args }}
+            - {{ . | quote }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.mysql.securityContext | nindent 12 }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+              protocol: TCP
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "uptime-kuma.mysql.secretName" . }}
+                  key: mysql-root-password
+            - name: MYSQL_DATABASE
+              value: {{ .Values.mysql.auth.database | quote }}
+            - name: MYSQL_USER
+              value: {{ .Values.mysql.auth.username | quote }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "uptime-kuma.mysql.secretName" . }}
+                  key: mysql-password
+            {{- with .Values.mysql.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          livenessProbe:
+            {{- toYaml .Values.mysql.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.mysql.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.mysql.resources | nindent 12 }}
+        {{- if .Values.metrics.enabled }}
+        - name: mysql-exporter
+          image: {{ .Values.metrics.image.repository }}:{{ .Values.metrics.image.tag }}
+          imagePullPolicy: {{ .Values.metrics.image.pullPolicy }}
+          args:
+            - --collect.info_schema.innodb_metrics
+            - --collect.info_schema.query_response_time
+          env:
+            - name: MYSQLD_EXPORTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "uptime-kuma.mysql.secretName" . }}
+                  key: mysql-root-password
+            - name: DATA_SOURCE_NAME
+              value: "root:$(MYSQLD_EXPORTER_PASSWORD)@(127.0.0.1:3306)/"
+          ports:
+            - name: metrics
+              containerPort: 9104
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.metrics.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+        {{- end }}
+      {{- with .Values.mysql.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mysql.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mysql.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.mysql.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: mysql-data
+        labels:
+          {{- include "uptime-kuma.mysql.labels" . | nindent 10 }}
+        annotations:
+          helm.sh/resource-policy: keep
+          {{- with .Values.mysql.persistence.annotations }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+      spec:
+        accessModes:
+          - {{ .Values.mysql.persistence.accessMode | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.mysql.persistence.size | quote }}
+        {{- if .Values.mysql.persistence.storageClass }}
+        {{- if (eq "-" .Values.mysql.persistence.storageClass) }}
+        storageClassName: ""
+        {{- else }}
+        storageClassName: {{ .Values.mysql.persistence.storageClass | quote }}
+        {{- end }}
+        {{- end }}
+  {{- else }}
+      volumes:
+        - name: mysql-data
+          emptyDir: {}
+  {{- end }}
+{{- end }}

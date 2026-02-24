@@ -1,185 +1,333 @@
-# Default values for uptime-kuma
+# =============================================================================
+# Uptime Kuma — Production Values
+# Docker Hardened Images (dhi.io) by default.
+# =============================================================================
+
+# -- Number of Uptime Kuma replicas. Must be 1 (Uptime Kuma is not horizontally scalable).
 replicaCount: 1
 
 image:
-  repository: louislam/uptime-kuma
+  repository: dhi.io/uptime-kuma
+  # -- Image tag. Pinned to a specific version for production stability.
+  tag: "2.1.3"
   pullPolicy: IfNotPresent
-  tag: "2.0.2"
 
+# -- Optionally specify imagePullSecrets for private registries (e.g. dhi.io credentials).
+# imagePullSecrets:
+#   - name: dhi-registry-secret
 imagePullSecrets: []
+
 nameOverride: ""
 fullnameOverride: ""
 
-serviceAccount:
-  create: true
-  annotations: {}
-  name: ""
+# =============================================================================
+# Uptime Kuma Application Config
+# =============================================================================
+uptimeKuma:
+  # -- Timezone for the application container.
+  timezone: "UTC"
+  # -- Data directory inside the container.
+  dataDir: "/app/data"
 
-podAnnotations: {}
-
-podSecurityContext:
-  fsGroup: 1000
-
-securityContext:
-  capabilities:
-    drop:
-    - ALL
-  readOnlyRootFilesystem: false
-  runAsNonRoot: true
-  runAsUser: 1000
-
-# Uptime Kuma Configuration
-config:
-  # Database Type: sqlite (default) or mariadb
-  databaseType: sqlite
-  
-  # SQLite Configuration (used when databaseType is sqlite)
-  sqlite:
-    # Path where the SQLite database will be stored
-    path: /app/data/kuma.db
-  
-  # MariaDB/MySQL Configuration (used when databaseType is mariadb)
-  mariadb:
-    enabled: false
-    host: ""
-    port: 3306
-    database: uptime_kuma
-    username: uptime_kuma
-    # Password can be set directly or via existing secret
-    password: ""
-    existingSecret: ""
-    existingSecretPasswordKey: "mariadb-password"
-    # Additional connection options
-    sslEnabled: false
-    charset: utf8mb4
-  
-  # Server Configuration
-  server:
-    # Port the application listens on (default: 3001)
-    port: 3001
-    # Host to bind to (default: 0.0.0.0)
-    host: "0.0.0.0"
-    # Base URL for the application (useful behind reverse proxy)
-    baseUrl: ""
-  
-  # Initial Setup Configuration
-  setup:
-    # Disable initial setup wizard (requires manual database setup)
-    disableSetup: false
-    # Default language (en, de, fr, es, etc.)
-    defaultLanguage: "en"
-  
-  # Notification Settings
-  notifications:
-    # Enable/disable specific notification channels
-    enabled: true
-  
-  # Data retention
-  dataRetention:
-    # Keep monitoring data for X days (0 = keep forever)
-    days: 180
-  
-  # Additional environment variables
-  extraEnv: []
-  # - name: CUSTOM_VAR
-  #   value: "custom-value"
-  
-  # Environment variables from secrets
-  extraEnvFrom: []
-  # - secretRef:
-  #     name: uptime-kuma-secrets
-
-# Persistence Configuration
-persistence:
+# =============================================================================
+# MySQL Backend (default: enabled)
+# Uses dhi.io/mysql — Docker Hardened Image.
+# =============================================================================
+mysql:
   enabled: true
-  # storageClass: "-"
-  accessMode: ReadWriteOnce
-  size: 4Gi
-  annotations: {}
-  # existingClaim: ""
-  # Path where data is stored in the container
-  mountPath: /app/data
 
+  image:
+    repository: dhi.io/mysql
+    tag: "8.4"
+    pullPolicy: IfNotPresent
+
+  auth:
+    # -- MySQL root password. Override via --set or a sealed secret.
+    # For production, set rootPassword via an existing secret (see existingSecret).
+    rootPassword: ""
+    database: "uptimekuma"
+    username: "uptimekuma"
+    password: ""
+    # -- Name of an existing Secret containing keys:
+    #    mysql-root-password, mysql-password
+    existingSecret: ""
+
+  # -- MySQL command-line flags.
+  args:
+    - --character-set-server=utf8mb4
+    - --collation-server=utf8mb4_unicode_ci
+    - --default-authentication-plugin=mysql_native_password
+
+  persistence:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 8Gi
+    # -- Annotations for the MySQL PVC.
+    annotations: {}
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # -- Security context for the MySQL container (non-root).
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    readOnlyRootFilesystem: false
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+  # -- Pod-level security context for MySQL.
+  podSecurityContext:
+    fsGroup: 999
+
+  # -- Additional environment variables for MySQL.
+  extraEnv: []
+
+  # -- Node selector, tolerations, affinity for MySQL pod.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  # -- MySQL service configuration.
+  service:
+    type: ClusterIP
+    port: 3306
+
+  # -- MySQL liveness/readiness probes.
+  livenessProbe:
+    exec:
+      command:
+        - mysqladmin
+        - ping
+        - -h
+        - 127.0.0.1
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+  readinessProbe:
+    exec:
+      command:
+        - mysql
+        - -h
+        - 127.0.0.1
+        - -u
+        - root
+        - -e
+        - "SELECT 1"
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # -- Pod disruption budget for MySQL.
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+
+# =============================================================================
+# External Database (use when mysql.enabled=false)
+# =============================================================================
+externalDatabase:
+  # -- Set to "mariadb" or "mysql" when mysql.enabled=false.
+  type: mysql
+  host: ""
+  port: 3306
+  database: "uptimekuma"
+  username: "uptimekuma"
+  password: ""
+  # -- Existing secret with key "db-password".
+  existingSecret: ""
+
+# =============================================================================
+# Uptime Kuma Service
+# =============================================================================
 service:
   type: ClusterIP
   port: 3001
-  targetPort: 3001
+  # -- Annotations for the Service resource.
   annotations: {}
-  # loadBalancerIP: ""
-  # externalTrafficPolicy: Cluster
 
+# =============================================================================
+# Ingress
+# =============================================================================
 ingress:
   enabled: false
   className: ""
   annotations: {}
+    # kubernetes.io/ingress.class: nginx
     # cert-manager.io/cluster-issuer: letsencrypt-prod
-    # nginx.ingress.kubernetes.io/proxy-body-size: 50m
-    # nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-    # nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
   hosts:
-    - host: uptime-kuma.local
+    - host: uptime-kuma.example.com
       paths:
         - path: /
           pathType: Prefix
   tls: []
-  #  - secretName: uptime-kuma-tls
-  #    hosts:
-  #      - uptime-kuma.local
+  # - secretName: uptime-kuma-tls
+  #   hosts:
+  #     - uptime-kuma.example.com
 
-resources: {}
-  # limits:
-  #   cpu: 500m
-  #   memory: 512Mi
-  # requests:
-  #   cpu: 250m
-  #   memory: 256Mi
-
-autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 3
-  targetCPUUtilizationPercentage: 80
-  targetMemoryUtilizationPercentage: 80
-
-nodeSelector: {}
-
-tolerations: []
-
-affinity: {}
-
-# Liveness and Readiness Probes
-livenessProbe:
+# =============================================================================
+# Persistence for Uptime Kuma
+# =============================================================================
+persistence:
   enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 5Gi
+  annotations: {}
+  # -- Use an existing PVC instead of creating a new one.
+  existingClaim: ""
+
+# =============================================================================
+# Resource Limits & Requests
+# =============================================================================
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# =============================================================================
+# Security Contexts
+# =============================================================================
+# -- Security context for the Uptime Kuma container.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# -- Pod-level security context for Uptime Kuma.
+podSecurityContext:
+  fsGroup: 1000
+
+# =============================================================================
+# Probes
+# =============================================================================
+livenessProbe:
   httpGet:
     path: /
-    port: http
+    port: 3001
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 5
+
+readinessProbe:
+  httpGet:
+    path: /
+    port: 3001
   initialDelaySeconds: 30
   periodSeconds: 10
   timeoutSeconds: 5
-  failureThreshold: 6
-  successThreshold: 1
+  failureThreshold: 3
 
-readinessProbe:
-  enabled: true
+startupProbe:
   httpGet:
     path: /
-    port: http
-  initialDelaySeconds: 10
+    port: 3001
+  initialDelaySeconds: 15
   periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
-  successThreshold: 1
+  failureThreshold: 30
 
-# Optional: Deploy MariaDB as part of this chart
-# Only used when config.mariadb.enabled is true
-mariadb:
+# =============================================================================
+# Service Account
+# =============================================================================
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+  automountServiceAccountToken: false
+
+# =============================================================================
+# Pod Settings
+# =============================================================================
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Topology spread constraints for high availability.
+topologySpreadConstraints: []
+
+# -- Additional environment variables for Uptime Kuma.
+extraEnv: []
+# - name: UPTIME_KUMA_DISABLE_FRAME_SAMEORIGIN
+#   value: "0"
+
+# -- Additional volumes to mount.
+extraVolumes: []
+extraVolumeMounts: []
+
+# =============================================================================
+# Pod Disruption Budget
+# =============================================================================
+podDisruptionBudget:
   enabled: false
-  auth:
-    database: uptime_kuma
-    username: uptime_kuma
-    password: changeme
-    rootPassword: changeme
-  primary:
-    persistence:
-      enabled: true
-      size: 8Gi
+  minAvailable: 1
+
+# =============================================================================
+# Horizontal Pod Autoscaler
+# NOTE: Uptime Kuma is stateful — HPA is defined here for completeness,
+# but should remain disabled unless you understand the implications.
+# =============================================================================
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPUUtilizationPercentage: 80
+
+# =============================================================================
+# Network Policy
+# =============================================================================
+networkPolicy:
+  # -- When enabled, restricts ingress/egress to only what is needed.
+  enabled: false
+  # -- Additional ingress rules beyond the defaults.
+  additionalIngressRules: []
+  # -- Additional egress rules beyond the defaults.
+  additionalEgressRules: []
+
+# =============================================================================
+# Prometheus Metrics (mysqld-exporter sidecar)
+# =============================================================================
+metrics:
+  enabled: false
+  image:
+    repository: dhi.io/mysqld-exporter
+    tag: "0.17"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}

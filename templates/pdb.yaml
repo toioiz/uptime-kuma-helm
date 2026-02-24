@@ -1,0 +1,29 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "uptime-kuma.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "uptime-kuma.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "uptime-kuma.selectorLabels" . | nindent 6 }}
+{{- end }}
+---
+{{- if and .Values.mysql.enabled .Values.mysql.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "uptime-kuma.mysql.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "uptime-kuma.mysql.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.mysql.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "uptime-kuma.mysql.selectorLabels" . | nindent 6 }}
+{{- end }}
