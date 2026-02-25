@@ -122,27 +122,16 @@ mysql:
 
   # -- MySQL liveness/readiness probes.
   livenessProbe:
-    exec:
-      command:
-        - mysqladmin
-        - ping
-        - -h
-        - 127.0.0.1
+    tcpSocket:
+      port: 3306
     initialDelaySeconds: 30
     periodSeconds: 10
     timeoutSeconds: 5
     failureThreshold: 6
 
   readinessProbe:
-    exec:
-      command:
-        - mysql
-        - -h
-        - 127.0.0.1
-        - -u
-        - root
-        - -e
-        - "SELECT 1"
+    tcpSocket:
+      port: 3306
     initialDelaySeconds: 10
     periodSeconds: 5
     timeoutSeconds: 3
