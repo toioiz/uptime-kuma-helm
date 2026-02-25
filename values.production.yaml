@@ -23,15 +23,16 @@ mysql:
     tag: "8.4"
 
   auth:
-    # Use an existing Secret managed by your secrets operator (e.g. External Secrets, Vault Agent).
-    # Secret must contain: mysql-root-password, mysql-password
-    existingSecret: "uptime-kuma-mysql-credentials"
+    # Passwords are auto-generated on first install and preserved across upgrades.
+    # To use an external secrets manager instead, set existingSecret to the name
+    # of a pre-created Secret with keys: mysql-root-password, mysql-password
+    # existingSecret: "uptime-kuma-mysql-credentials"
     database: "uptimekuma"
     username: "uptimekuma"
 
   persistence:
     enabled: true
-    storageClass: "fast-ssd"   # replace with your StorageClass
+    storageClass: "harvester-longhorn"
     size: 20Gi
 
   resources:
@@ -48,7 +49,7 @@ mysql:
 
 persistence:
   enabled: true
-  storageClass: "fast-ssd"
+  storageClass: "harvester-longhorn"
   size: 10Gi
 
 ingress:
@@ -92,7 +93,7 @@ podDisruptionBudget:
   minAvailable: 1
 
 uptimeKuma:
-  timezone: "America/New_York"
+  timezone: "UTC"
 
 # Spread across nodes/zones if available
 topologySpreadConstraints:

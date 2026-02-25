@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "uptime-kuma.mysql.labels" . | nindent 4 }}
 spec:
-  serviceName: {{ include "uptime-kuma.mysql.fullname" . }}
+  serviceName: {{ include "uptime-kuma.mysql.fullname" . }}-headless
   replicas: 1
   selector:
     matchLabels:
@@ -17,8 +17,11 @@ spec:
       labels:
         {{- include "uptime-kuma.mysql.selectorLabels" . | nindent 8 }}
       annotations:
-        # Restart on secret changes.
-        checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+        # Changing auth values or config triggers a pod restart.
+        # We checksum the values rather than the rendered secret (which uses
+        # `include "file.yaml"` — not valid in Helm) to avoid re-rendering issues.
+        checksum/secret: {{ toYaml .Values.mysql.auth | sha256sum }}
+        checksum/config: {{ toYaml .Values.mysql.config | sha256sum }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -26,14 +29,91 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.mysql.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Ensure the data directory is owned by the mysql user (UID/GID 65532 per dhi.io image spec).
+        # Required for Longhorn and mandatory for NFS, where the Kubernetes
+        # fsGroup mechanism is not honoured by the NFS server.
+        - name: fix-data-dir-permissions
+          image: busybox:1.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "Setting ownership of /var/lib/mysql and /run/mysqld to {{ .Values.mysql.securityContext.runAsUser }}:{{ .Values.mysql.securityContext.runAsGroup }}"
+              mkdir -p /var/lib/mysql /run/mysqld
+              chown -R {{ .Values.mysql.securityContext.runAsUser }}:{{ .Values.mysql.securityContext.runAsGroup }} /var/lib/mysql /run/mysqld
+              chmod 750 /var/lib/mysql
+              chmod 755 /run/mysqld
+              # Remove lost+found if present — Longhorn/ext4 volumes create this
+              # directory on the block device, which confuses MySQL's empty-datadir
+              # check in the entrypoint script (ls -A returns non-empty).
+              rm -rf /var/lib/mysql/lost+found
+              echo "Done."
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER]
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+        # Write an init SQL file that ensures root@localhost has the correct
+        # password. The dhi.io entrypoint creates root@'%' with the password
+        # but leaves root@localhost (created by --initialize-insecure) without
+        # one. We use --init-file to fix this on every startup idempotently.
+        - name: write-init-sql
+          image: busybox:1.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # Escape single quotes in password for SQL safety
+              PW=$(echo "$MYSQL_ROOT_PASSWORD" | sed "s/'/\\\\'/g")
+              cat > /init/init.sql <<EOF
+              ALTER USER 'root'@'localhost' IDENTIFIED WITH caching_sha2_password BY '${PW}';
+              ALTER USER 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${PW}';
+              FLUSH PRIVILEGES;
+              EOF
+              echo "init.sql written."
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "uptime-kuma.mysql.secretName" . }}
+                  key: mysql-root-password
+          securityContext:
+            runAsUser: 65532
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: mysql-init
+              mountPath: /init
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
       containers:
         - name: mysql
           image: {{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}
           imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
-          args:
-            {{- range .Values.mysql.args }}
-            - {{ . | quote }}
-            {{- end }}
           securityContext:
             {{- toYaml .Values.mysql.securityContext | nindent 12 }}
           ports:
@@ -58,9 +138,17 @@ spec:
             {{- with .Values.mysql.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            # MYSQL_OPTIONS is appended verbatim to the mysqld command by the
+            # dhi.io entrypoint script. Use it to pass flags the entrypoint
+            # doesn't expose as dedicated env vars.
+            - name: MYSQL_OPTIONS
+              value: "--bind-address=0.0.0.0 --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-authentication-plugin=caching_sha2_password --init-file=/init/init.sql"
           volumeMounts:
             - name: mysql-data
               mountPath: /var/lib/mysql
+            - name: mysql-init
+              mountPath: /init
+              readOnly: true
           livenessProbe:
             {{- toYaml .Values.mysql.livenessProbe | nindent 12 }}
           readinessProbe:
@@ -72,6 +160,8 @@ spec:
           image: {{ .Values.metrics.image.repository }}:{{ .Values.metrics.image.tag }}
           imagePullPolicy: {{ .Values.metrics.image.pullPolicy }}
           args:
+            - --mysqld.address=127.0.0.1:3306
+            - --mysqld.username=root
             - --collect.info_schema.innodb_metrics
             - --collect.info_schema.query_response_time
           env:
@@ -80,8 +170,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "uptime-kuma.mysql.secretName" . }}
                   key: mysql-root-password
-            - name: DATA_SOURCE_NAME
-              value: "root:$(MYSQLD_EXPORTER_PASSWORD)@(127.0.0.1:3306)/"
           ports:
             - name: metrics
               containerPort: 9104
@@ -94,6 +182,13 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+        {{- end }}
+      volumes:
+        - name: mysql-init
+          emptyDir: {}
+        {{- if not .Values.mysql.persistence.enabled }}
+        - name: mysql-data
+          emptyDir: {}
         {{- end }}
       {{- with .Values.mysql.nodeSelector }}
       nodeSelector:
@@ -131,9 +226,5 @@ spec:
         storageClassName: {{ .Values.mysql.persistence.storageClass | quote }}
         {{- end }}
         {{- end }}
-  {{- else }}
-      volumes:
-        - name: mysql-data
-          emptyDir: {}
   {{- end }}
 {{- end }}

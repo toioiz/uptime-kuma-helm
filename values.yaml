@@ -42,25 +42,39 @@ mysql:
     pullPolicy: IfNotPresent
 
   auth:
-    # -- MySQL root password. Override via --set or a sealed secret.
-    # For production, set rootPassword via an existing secret (see existingSecret).
+    # -- MySQL root password. If left empty, a random 32-character password is
+    # generated on first install and preserved across upgrades via secret lookup.
+    # To set explicitly: --set mysql.auth.rootPassword=mysecret
     rootPassword: ""
     database: "uptimekuma"
     username: "uptimekuma"
+    # -- MySQL app password. If left empty, a random 32-character password is
+    # generated on first install and kept in sync with db-password automatically.
+    # To set explicitly: --set mysql.auth.password=mysecret
     password: ""
-    # -- Name of an existing Secret containing keys:
-    #    mysql-root-password, mysql-password
+    # -- Name of an existing Secret with keys: mysql-root-password, mysql-password.
+    # When set, disables auto-generation entirely.
     existingSecret: ""
 
-  # -- MySQL command-line flags.
-  args:
-    - --character-set-server=utf8mb4
-    - --collation-server=utf8mb4_unicode_ci
-    - --default-authentication-plugin=mysql_native_password
+  # -- dhi.io/mysql uses a direct mysqld entrypoint and does NOT accept --flag style args.
+  # Configuration is handled via the my.cnf ConfigMap below (mysql.config).
+  # Leave args empty unless you know the image entrypoint supports them.
+  args: []
+
+  # -- MySQL configuration mounted as /etc/mysql/conf.d/custom.cnf inside the container.
+  # bind-address=0.0.0.0 is required: dhi.io/mysql defaults to 127.0.0.1 which
+  # prevents the ClusterIP service from routing traffic to the pod.
+  config: |
+    [mysqld]
+    datadir                 = /var/lib/mysql
+    bind-address            = 0.0.0.0
+    character-set-server    = utf8mb4
+    collation-server        = utf8mb4_unicode_ci
+    default_authentication_plugin = mysql_native_password
 
   persistence:
     enabled: true
-    storageClass: ""
+    storageClass: "harvester-longhorn"
     accessMode: ReadWriteOnce
     size: 8Gi
     # -- Annotations for the MySQL PVC.
@@ -77,8 +91,8 @@ mysql:
   # -- Security context for the MySQL container (non-root).
   securityContext:
     runAsNonRoot: true
-    runAsUser: 999
-    runAsGroup: 999
+    runAsUser: 65532
+    runAsGroup: 65532
     readOnlyRootFilesystem: false
     allowPrivilegeEscalation: false
     capabilities:
@@ -86,8 +100,12 @@ mysql:
         - ALL
 
   # -- Pod-level security context for MySQL.
+  # fsGroup causes Kubernetes to chown the volume to this GID on mount.
+  # This works for most CSI drivers (including Longhorn) but is ignored by NFS.
+  # The fix-data-dir-permissions init container handles NFS and any other
+  # storage that doesn't honour fsGroup.
   podSecurityContext:
-    fsGroup: 999
+    fsGroup: 65532
 
   # -- Additional environment variables for MySQL.
   extraEnv: []
@@ -184,7 +202,7 @@ ingress:
 # =============================================================================
 persistence:
   enabled: true
-  storageClass: ""
+  storageClass: "harvester-longhorn"
   accessMode: ReadWriteOnce
   size: 5Gi
   annotations: {}
