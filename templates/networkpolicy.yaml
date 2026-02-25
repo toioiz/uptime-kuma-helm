@@ -31,12 +31,11 @@ spec:
         - port: 53
           protocol: TCP
     {{- if .Values.mysql.enabled }}
-    # Allow outbound to MySQL
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "uptime-kuma.mysql.selectorLabels" . | nindent 14 }}
-      ports:
+    # Allow outbound to MySQL on port 3306.
+    # Port-only rule (no 'to' podSelector) ensures ClusterIP traffic isn't
+    # blocked — some CNIs don't match podSelector egress rules against
+    # kube-proxy DNAT'd ClusterIP destinations.
+    - ports:
         - port: {{ .Values.mysql.service.port }}
           protocol: TCP
     {{- end }}

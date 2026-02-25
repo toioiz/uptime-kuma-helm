@@ -26,7 +26,7 @@ spec:
         {{- end }}
       annotations:
         # Restart on ConfigMap change.
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/config: {{ toYaml .Values.uptimeKuma | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -41,28 +41,22 @@ spec:
       {{- if .Values.mysql.enabled }}
       initContainers:
         - name: wait-for-mysql
-          image: {{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}
-          imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
+          image: busybox:1.37
+          imagePullPolicy: IfNotPresent
           command:
             - sh
             - -c
             - |
-              echo "Waiting for MySQL at {{ include "uptime-kuma.databaseHost" . }}:{{ include "uptime-kuma.databasePort" . }}..."
-              until mysql -h {{ include "uptime-kuma.databaseHost" . }} \
-                         -P {{ include "uptime-kuma.databasePort" . }} \
-                         -u {{ include "uptime-kuma.databaseUser" . }} \
-                         -p"$DB_PASSWORD" \
-                         -e "SELECT 1" >/dev/null 2>&1; do
-                echo "MySQL not ready, sleeping 3s..."
+              HOST={{ include "uptime-kuma.databaseHost" . }}
+              PORT={{ include "uptime-kuma.databasePort" . }}
+              echo "Waiting for MySQL at ${HOST}:${PORT}..."
+              until nc -z -w 3 "${HOST}" "${PORT}" >/dev/null 2>&1; do
+                echo "MySQL not ready (tried ${HOST}:${PORT}), sleeping 3s..."
+                # Print DNS result to help debug
+                nslookup "${HOST}" 2>&1 | tail -3 || true
                 sleep 3
               done
               echo "MySQL is ready."
-          env:
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "uptime-kuma.databaseSecretName" . }}
-                  key: db-password
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
